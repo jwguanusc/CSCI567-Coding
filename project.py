@@ -16,7 +16,7 @@ from sklearn.metrics import mean_squared_error
 path = kagglehub.competition_download('house-prices-advanced-regression-techniques')
 df = pd.read_csv(os.path.join(path, "train.csv"))
 
-# 🔥 Log transform target
+# Log transform
 y = np.log1p(df["SalePrice"])
 X = df.drop(columns=["SalePrice", "Id"], errors="ignore")
 
@@ -26,26 +26,14 @@ X = df.drop(columns=["SalePrice", "Id"], errors="ignore")
 numCols = X.select_dtypes(include=['number']).columns
 catCols = X.select_dtypes(include=['object']).columns
 
-# Fill missing values
 X[numCols] = X[numCols].fillna(X[numCols].median())
 X[catCols] = X[catCols].fillna("Missing")
 
-# Optional ordinal mapping
-qualMap = {
-    "Ex": 5,
-    "Gd": 4,
-    "TA": 3,
-    "Fa": 2,
-    "Po": 1,
-    "Missing": 0
-}
-
-ordinalCols = ["KitchenQual", "ExterQual"]
-for col in ordinalCols:
+qualMap = {"Ex":5,"Gd":4,"TA":3,"Fa":2,"Po":1,"Missing":0}
+for col in ["KitchenQual","ExterQual"]:
     if col in X.columns:
         X[col] = X[col].map(qualMap)
 
-# One-hot encoding
 X = pd.get_dummies(X)
 
 # ========================
@@ -53,54 +41,36 @@ X = pd.get_dummies(X)
 # ========================
 kFold = KFold(n_splits=5, shuffle=True, random_state=42)
 
-ridgeRmseList = []
-lassoRmseList = []
-gbRmseList = []
-hybridRmseList = []
+ridgeList, lassoList, gbList, hybridList, stackList = [], [], [], [], []
 
-# For residual plot
-allYTest = []
-allRidgePred = []
-allHybridPred = []
+allYTest, allGbPred = [], []
 
-# ========================
-# RMSE Function (convert back)
-# ========================
 def rmse(yTrue, yPred):
-    yTrueExp = np.expm1(yTrue)
-    yPredExp = np.expm1(yPred)
-    return np.sqrt(mean_squared_error(yTrueExp, yPredExp))
+    return np.sqrt(mean_squared_error(np.expm1(yTrue), np.expm1(yPred)))
 
 # ========================
-# K-Fold Training
+# Training Loop
 # ========================
 for trainIdx, testIdx in kFold.split(X):
 
     XTrain, XTest = X.iloc[trainIdx], X.iloc[testIdx]
     yTrain, yTest = y.iloc[trainIdx], y.iloc[testIdx]
 
-    # Scaling for linear models
     scaler = StandardScaler()
     XTrainScaled = scaler.fit_transform(XTrain)
     XTestScaled = scaler.transform(XTest)
 
-    # ------------------------
     # Ridge
-    # ------------------------
     ridge = Ridge(alpha=1.0)
     ridge.fit(XTrainScaled, yTrain)
     yPredRidge = ridge.predict(XTestScaled)
 
-    # ------------------------
-    # Lasso (tuned)
-    # ------------------------
+    # Lasso
     lasso = Lasso(alpha=0.0005, max_iter=10000)
     lasso.fit(XTrainScaled, yTrain)
     yPredLasso = lasso.predict(XTestScaled)
 
-    # ------------------------
-    # Gradient Boosting (tuned)
-    # ------------------------
+    # Gradient Boosting
     gb = GradientBoostingRegressor(
         n_estimators=500,
         learning_rate=0.03,
@@ -111,77 +81,104 @@ for trainIdx, testIdx in kFold.split(X):
     gb.fit(XTrain, yTrain)
     yPredGb = gb.predict(XTest)
 
-    # ------------------------
-    # Hybrid (weighted)
-    # ------------------------
+    # Hybrid
     alpha = 0.05
-    yPredHybrid = alpha * yPredRidge + (1 - alpha) * yPredGb
+    yPredHybrid = alpha*yPredRidge + (1-alpha)*yPredGb
 
-    # ------------------------
+    # Stacking
+    stackTrain = np.vstack([ridge.predict(XTrainScaled), gb.predict(XTrain)]).T
+    stackTest = np.vstack([yPredRidge, yPredGb]).T
+
+    meta = Ridge(alpha=1.0)
+    meta.fit(stackTrain, yTrain)
+    yPredStack = meta.predict(stackTest)
+
     # Store RMSE
-    # ------------------------
-    ridgeRmseList.append(rmse(yTest, yPredRidge))
-    lassoRmseList.append(rmse(yTest, yPredLasso))
-    gbRmseList.append(rmse(yTest, yPredGb))
-    hybridRmseList.append(rmse(yTest, yPredHybrid))
+    ridgeList.append(rmse(yTest, yPredRidge))
+    lassoList.append(rmse(yTest, yPredLasso))
+    gbList.append(rmse(yTest, yPredGb))
+    hybridList.append(rmse(yTest, yPredHybrid))
+    stackList.append(rmse(yTest, yPredStack))
 
-    # Store for residual plot
+    # store for graphs
     allYTest.extend(np.expm1(yTest))
-    allRidgePred.extend(np.expm1(yPredRidge))
-    allHybridPred.extend(np.expm1(yPredHybrid))
+    allGbPred.extend(np.expm1(yPredGb))
 
 # ========================
 # Results
 # ========================
-print("\n=== Final Results ===")
-print("Ridge Avg:", np.mean(ridgeRmseList))
-print("Lasso Avg:", np.mean(lassoRmseList))
-print("GB Avg:", np.mean(gbRmseList))
-print("Hybrid Avg:", np.mean(hybridRmseList))
+print("\n=== FINAL RESULTS ===")
+print("Ridge:", np.mean(ridgeList))
+print("Lasso:", np.mean(lassoList))
+print("GB:", np.mean(gbList))
+print("Hybrid:", np.mean(hybridList))
+print("Stack:", np.mean(stackList))
 
 # ========================
 # Graph 1: Model Comparison
 # ========================
-models = ["Ridge", "Lasso", "GB", "Hybrid"]
-scores = [
-    np.mean(ridgeRmseList),
-    np.mean(lassoRmseList),
-    np.mean(gbRmseList),
-    np.mean(hybridRmseList)
-]
-
 plt.figure()
-plt.bar(models, scores)
+plt.bar(["Ridge","Lasso","GB","Hybrid","Stack"],
+        [np.mean(ridgeList),np.mean(lassoList),
+         np.mean(gbList),np.mean(hybridList),np.mean(stackList)])
+plt.title("Model Comparison")
 plt.ylabel("RMSE")
-plt.title("Model Comparison (Improved)")
 plt.show()
 
 # ========================
 # Graph 2: RMSE per Fold
 # ========================
 plt.figure()
-plt.plot(ridgeRmseList, marker='o', label="Ridge")
-plt.plot(lassoRmseList, marker='o', label="Lasso")
-plt.plot(gbRmseList, marker='o', label="GB")
-plt.plot(hybridRmseList, marker='o', label="Hybrid")
-
-plt.xlabel("Fold")
-plt.ylabel("RMSE")
-plt.title("RMSE Across Folds")
+plt.plot(ridgeList, label="Ridge")
+plt.plot(lassoList, label="Lasso")
+plt.plot(gbList, label="GB")
+plt.plot(hybridList, label="Hybrid")
+plt.plot(stackList, label="Stack")
 plt.legend()
+plt.title("RMSE Across Folds")
 plt.show()
 
 # ========================
-# Graph 3: Residual Comparison
+# Graph 3: Actual vs Predicted
 # ========================
 plt.figure()
-plt.scatter(allYTest, np.array(allYTest) - np.array(allRidgePred),
-            alpha=0.3, label="Ridge")
-plt.scatter(allYTest, np.array(allYTest) - np.array(allHybridPred),
-            alpha=0.3, label="Hybrid")
+plt.scatter(allYTest, allGbPred, alpha=0.5)
+plt.plot([0,max(allYTest)], [0,max(allYTest)], 'r--')
+plt.xlabel("Actual")
+plt.ylabel("Predicted")
+plt.title("Actual vs Predicted (GB)")
+plt.show()
 
-plt.xlabel("True Price")
-plt.ylabel("Residual")
-plt.title("Residual Comparison")
-plt.legend()
+# ========================
+# Graph 4: Residual Distribution
+# ========================
+residuals = np.array(allYTest) - np.array(allGbPred)
+
+plt.figure()
+plt.hist(residuals, bins=50)
+plt.title("Residual Distribution")
+plt.show()
+
+# ========================
+# Graph 5: Error vs Price
+# ========================
+errors = abs(residuals)
+
+plt.figure()
+plt.scatter(allYTest, errors, alpha=0.5)
+plt.xlabel("Price")
+plt.ylabel("Error")
+plt.title("Error vs Price")
+plt.show()
+
+# ========================
+# Graph 6: Feature Importance
+# ========================
+importances = gb.feature_importances_
+indices = np.argsort(importances)[-10:]
+
+plt.figure()
+plt.barh(range(len(indices)), importances[indices])
+plt.yticks(range(len(indices)), X.columns[indices])
+plt.title("Top Features")
 plt.show()
