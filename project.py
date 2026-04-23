@@ -45,8 +45,11 @@ ridgeList, lassoList, gbList, hybridList, stackList = [], [], [], [], []
 
 allYTest, allGbPred = [], []
 
+#def rmse(yTrue, yPred):
+#    return np.sqrt(mean_squared_error(np.expm1(yTrue), np.expm1(yPred)))
+
 def rmse(yTrue, yPred):
-    return np.sqrt(mean_squared_error(np.expm1(yTrue), np.expm1(yPred)))
+    return np.sqrt(mean_squared_error(yTrue, yPred))
 
 # ========================
 # Training Loop
